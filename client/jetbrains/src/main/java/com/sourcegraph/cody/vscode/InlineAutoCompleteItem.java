@@ -70,13 +70,20 @@ public class InlineAutoCompleteItem {
         !sameLineSuffix.isEmpty() && sameLineRawAutocomplete.contains(sameLineSuffix);
     int lastSuffixIndex = sameLineRawAutocomplete.lastIndexOf(sameLineSuffix);
     String sameLineBeforeSuffixText =
+<<<<<<< Updated upstream
         needAfterEndOfLineSuffix
             ? sameLineRawAutocomplete.substring(0, lastSuffixIndex)
             : sameLineRawAutocomplete;
     String afterEndOfLineSuffix =
+=======
+>>>>>>> Stashed changes
         needAfterEndOfLineSuffix
-            ? sameLineRawAutocomplete.substring(lastSuffixIndex + sameLineSuffix.length())
-            : "";
+            ? sameLineRawAutocomplete.substring(0, lastSuffixIndex)
+            : sameLineRawAutocomplete;
+    String afterEndOfLineSuffix =
+//        needAfterEndOfLineSuffix
+//            ? sameLineRawAutocomplete.substring(lastSuffixIndex + sameLineSuffix.length())
+             "";
     String blockText =
         multiline
             ? this.insertText.lines().skip(1).collect(Collectors.joining(System.lineSeparator()))

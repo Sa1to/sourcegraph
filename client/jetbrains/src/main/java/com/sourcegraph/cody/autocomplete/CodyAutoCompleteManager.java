@@ -2,6 +2,7 @@ package com.sourcegraph.cody.autocomplete;
 
 import com.intellij.injected.editor.EditorWindow;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.*;
 import com.intellij.openapi.editor.ex.EditorEx;
@@ -9,6 +10,7 @@ import com.intellij.openapi.editor.impl.ImaginaryEditor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.Key;
+import com.intellij.openapi.util.TextRange;
 import com.intellij.psi.codeStyle.CommonCodeStyleSettings;
 import com.intellij.util.concurrency.annotations.RequiresEdt;
 import com.sourcegraph.cody.CodyCompatibility;
@@ -20,17 +22,23 @@ import com.sourcegraph.common.EditorUtils;
 import com.sourcegraph.config.ConfigUtil;
 import com.sourcegraph.config.NotificationActivity;
 import com.sourcegraph.telemetry.GraphQlLogger;
+
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+
 import org.apache.commons.lang.StringUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-/** Responsible for triggering and clearing inline code completions (the autocomplete feature). */
+/**
+ * Responsible for triggering and clearing inline code completions (the autocomplete feature).
+ */
 public class CodyAutoCompleteManager {
   private static final Logger logger = Logger.getInstance(CodyAutoCompleteManager.class);
   private static final Key<Boolean> KEY_EDITOR_SUPPORTED = Key.create("cody.editorSupported");
+  public static final Key<String> DELETED_TXT = Key.create("deleted");
+
   private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
   // TODO: figure out how to avoid the ugly nested `Future<CompletableFuture<T>>` type.
   private final AtomicReference<Optional<Future<CompletableFuture<Void>>>> currentJob =
@@ -43,6 +51,15 @@ public class CodyAutoCompleteManager {
   @RequiresEdt
   public void clearAutoCompleteSuggestions(@NotNull Editor editor) {
     cancelCurrentJob();
+
+    var deletedText = editor.getUserData(DELETED_TXT);
+    if (deletedText != null) {
+      WriteCommandAction.runWriteCommandAction(editor.getProject(), () -> {
+        int caretOffset = editor.getCaretModel().getOffset();
+        editor.getDocument().insertString(caretOffset, deletedText);
+        editor.putUserData(DELETED_TXT, null);
+      });
+    }
     InlayModelUtils.getAllInlaysForEditor(editor).stream()
         .filter(inlay -> inlay.getRenderer() instanceof CodyAutoCompleteElementRenderer)
         .forEach(Disposer::dispose);
@@ -145,6 +162,15 @@ public class CodyAutoCompleteManager {
                           AutoCompleteText autoCompleteText =
                               item.toAutoCompleteText(
                                   autoCompleteDocumentContext.getSameLineSuffix().trim());
+//                          WriteCommandAction.runWriteCommandAction(editor.getProject(), () -> {
+//                            // Modify the document content here
+//                            var document = editor.getDocument();
+//                            int line = document.getLineNumber(offset);
+//                            int lineEndOffset = document.getLineEndOffset(line);
+//                            var deletedText = editor.getDocument().getText(new TextRange(offset, lineEndOffset));
+//                            editor.putUserData(DELETED_TXT, deletedText);
+//                            editor.getDocument().deleteString(offset, lineEndOffset);
+//                          });
                           autoCompleteText
                               .getInlineRenderer(editor)
                               .ifPresent(
@@ -159,9 +185,20 @@ public class CodyAutoCompleteManager {
                           autoCompleteText
                               .getBlockRenderer(editor)
                               .ifPresent(
-                                  blockRenderer ->
-                                      inlayModel.addBlockElement(
-                                          offset, true, false, Integer.MAX_VALUE, blockRenderer));
+                                  blockRenderer -> {
+                                    WriteCommandAction.runWriteCommandAction(editor.getProject(), () -> {
+                                      // Modify the document content here
+                                      var document = editor.getDocument();
+                                      int line = document.getLineNumber(offset);
+                                      int lineEndOffset = document.getLineEndOffset(line);
+                                      var deletedText = editor.getDocument().getText(new TextRange(offset, lineEndOffset));
+                                      editor.putUserData(DELETED_TXT, deletedText);
+                                      editor.getDocument().deleteString(offset, lineEndOffset);
+                                    });
+                                    inlayModel.addBlockElement(
+                                        offset, true, false, Integer.MAX_VALUE, blockRenderer);
+                                  }
+                              );
                         });
               } catch (Exception e) {
                 // TODO: do something smarter with unexpected errors.
@@ -255,8 +292,8 @@ public class CodyAutoCompleteManager {
                 try {
                   job.get().cancel(true);
                 } catch (ExecutionException
-                    | InterruptedException
-                    | CancellationException ignored) {
+                         | InterruptedException
+                         | CancellationException ignored) {
                 }
               } else {
                 // Cancelling the toplevel `Future<>` appears to cancel the nested
